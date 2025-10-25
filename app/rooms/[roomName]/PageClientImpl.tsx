@@ -77,6 +77,20 @@ export function PageClientImpl(props: {
       'form.lk-username-container input#username',
     );
     if (input && input.value !== displayedUsername) {
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      nativeInputValueSetter?.call(input, displayedUsername);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }, [displayedUsername]);
+
+  React.useEffect(() => {
+    const input = preJoinContainerRef.current?.querySelector<HTMLInputElement>(
+      'form.lk-username-container input#username',
+    );
+    if (input && input.value !== displayedUsername) {
       input.value = displayedUsername;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -153,8 +167,7 @@ export function PageClientImpl(props: {
       {connectionDetails === undefined || preJoinChoices === undefined ? (
         <div className={roomStyles.preJoinCard}>
           <div className={roomStyles.accessColumn}>
-            <h2>Обмен кодом</h2>
-            <p>Подтвердите, что вы в нужной комнате. Код можно добавить или убрать в любой момент.</p>
+            <h2>Настройки</h2>
             <label>
               <span>Ваше имя</span>
               <input
@@ -204,11 +217,11 @@ export function PageClientImpl(props: {
               type="button"
               className={roomStyles.joinButton}
               onClick={() => {
-                const form = preJoinContainerRef.current?.querySelector<HTMLFormElement>(
-                  'form.lk-username-container',
+                const joinBtn = preJoinContainerRef.current?.querySelector<HTMLButtonElement>(
+                  'form.lk-username-container button[type="submit"]',
                 );
-                if (form) {
-                  form.requestSubmit();
+                if (joinBtn) {
+                  joinBtn.click();
                 }
               }}
               disabled={
@@ -217,7 +230,7 @@ export function PageClientImpl(props: {
                 (isCodeFieldVisible && roomCodeRequired && roomCodeInput.trim().length === 0)
               }
             >
-              Гоу созвон
+              Подключиться
             </button>
           </div>
           <div className={roomStyles.preJoinForm} ref={preJoinContainerRef}>
@@ -227,6 +240,7 @@ export function PageClientImpl(props: {
               onError={handlePreJoinError}
               joinLabel="Го созвон"
               persistUserChoices={false}
+              onValidate={() => true}
             />
           </div>
         </div>

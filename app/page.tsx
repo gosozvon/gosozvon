@@ -72,7 +72,7 @@ export default function Page() {
               onClick={handleCreateCall}
               disabled={isCreating}
             >
-              Гоу
+              Го
             </button>
           </div>
         </section>
