@@ -1,5 +1,6 @@
 import { randomString } from '@/lib/client-utils';
 import { resolveServerUrl } from '@/lib/resolveServerUrl';
+import { getRoomSettings } from '@/lib/roomStore';
 import { ConnectionDetails } from '@/lib/types';
 import { AccessToken, AccessTokenOptions, VideoGrant } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
@@ -31,6 +32,28 @@ export async function GET(request: NextRequest) {
     }
     if (participantName === null) {
       return new NextResponse('Missing required query parameter: participantName', { status: 400 });
+    }
+
+    const providedCodeRaw = request.nextUrl.searchParams.get('code') ?? undefined;
+    const providedCode =
+      typeof providedCodeRaw === 'string' && providedCodeRaw.trim().length > 0
+        ? providedCodeRaw.trim()
+        : undefined;
+    const roomSettings = getRoomSettings(roomName);
+
+    if (roomSettings?.code) {
+      if (!providedCode) {
+        return NextResponse.json(
+          { ok: false, error: 'Room code required for this meeting' },
+          { status: 403 },
+        );
+      }
+      if (roomSettings.code !== providedCode) {
+        return NextResponse.json(
+          { ok: false, error: 'Invalid room code' },
+          { status: 403 },
+        );
+      }
     }
 
     // Generate participant token

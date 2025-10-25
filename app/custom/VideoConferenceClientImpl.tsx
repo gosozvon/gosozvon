@@ -2,7 +2,6 @@
 
 import { formatChatMessageLinks, RoomContext, VideoConference } from '@livekit/components-react';
 import {
-  ExternalE2EEKeyProvider,
   LogLevel,
   Room,
   RoomConnectOptions,
@@ -11,42 +10,30 @@ import {
   type VideoCodec,
 } from 'livekit-client';
 import { DebugMode } from '@/lib/Debug';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { KeyboardShortcuts } from '@/lib/KeyboardShortcuts';
 import { SettingsMenu } from '@/lib/SettingsMenu';
-import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
 import { isMeetStaging } from '@/lib/client-utils';
+import roomStyles from '@/styles/Rooms.module.css';
 
 export function VideoConferenceClientImpl(props: {
   serverUrl: string;
   token: string;
   codec: VideoCodec | undefined;
 }) {
-  const keyProvider = new ExternalE2EEKeyProvider();
-  const { worker, e2eePassphrase } = useSetupE2EE();
-  const e2eeEnabled = !!(e2eePassphrase && worker);
-
-  const [e2eeSetupComplete, setE2eeSetupComplete] = useState(false);
-
   const roomOptions = useMemo((): RoomOptions => {
     return {
       publishDefaults: {
         videoSimulcastLayers: [VideoPresets.h540, VideoPresets.h216],
-        red: !e2eeEnabled,
+        red: true,
         videoCodec: props.codec,
       },
       adaptiveStream: { pixelDensity: 'screen' },
       dynacast: true,
-      e2ee: e2eeEnabled
-        ? {
-            keyProvider,
-            worker,
-          }
-        : undefined,
       singlePeerConnection: isMeetStaging(),
     };
-  }, [e2eeEnabled, props.codec, keyProvider, worker]);
+  }, [props.codec]);
 
   const room = useMemo(() => new Room(roomOptions), [roomOptions]);
 
@@ -57,32 +44,18 @@ export function VideoConferenceClientImpl(props: {
   }, []);
 
   useEffect(() => {
-    if (e2eeEnabled) {
-      keyProvider.setKey(e2eePassphrase).then(() => {
-        room.setE2EEEnabled(true).then(() => {
-          setE2eeSetupComplete(true);
-        });
-      });
-    } else {
-      setE2eeSetupComplete(true);
-    }
-  }, [e2eeEnabled, e2eePassphrase, keyProvider, room, setE2eeSetupComplete]);
-
-  useEffect(() => {
-    if (e2eeSetupComplete) {
-      room.connect(props.serverUrl, props.token, connectOptions).catch((error) => {
-        console.error(error);
-      });
-      room.localParticipant.enableCameraAndMicrophone().catch((error) => {
-        console.error(error);
-      });
-    }
-  }, [room, props.serverUrl, props.token, connectOptions, e2eeSetupComplete]);
+    room.connect(props.serverUrl, props.token, connectOptions).catch((error) => {
+      console.error(error);
+    });
+    room.localParticipant.enableCameraAndMicrophone().catch((error) => {
+      console.error(error);
+    });
+  }, [room, props.serverUrl, props.token, connectOptions]);
 
   useLowCPUOptimizer(room);
 
   return (
-    <div className="lk-room-container">
+    <div className={`${roomStyles.roomShell} lk-room-container`}>
       <RoomContext.Provider value={room}>
         <KeyboardShortcuts />
         <VideoConference
