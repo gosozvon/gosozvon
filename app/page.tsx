@@ -14,6 +14,7 @@ export default function Page() {
     if (isCreating) {
       return;
     }
+
     const roomId = generateRoomId();
     const trimmedCode = roomCode.trim();
     try {
@@ -39,7 +40,7 @@ export default function Page() {
     } finally {
       setIsCreating(false);
     }
-  }, [router, roomCode, isCreating]);
+  }, [isCreating, roomCode, router]);
 
   return (
     <>

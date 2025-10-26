@@ -43,11 +43,59 @@ export function PageClientImpl(props: {
   const [preJoinChoices, setPreJoinChoices] = React.useState<LocalUserChoices | undefined>(
     undefined,
   );
+  const [hasVideoInput, setHasVideoInput] = React.useState<boolean | null>(null);
   const preJoinDefaults = React.useMemo(() => {
+    const initialVideoEnabled = hasVideoInput !== false;
     return {
       username: '',
-      videoEnabled: true,
+      videoEnabled: initialVideoEnabled,
       audioEnabled: true,
+    };
+  }, [hasVideoInput]);
+  React.useEffect(() => {
+    let mounted = true;
+    const refreshDevices = async () => {
+      try {
+        const devices = await Room.getLocalDevices('videoinput');
+        if (!mounted) {
+          return;
+        }
+        setHasVideoInput(devices.length > 0);
+      } catch (error) {
+        if (mounted) {
+          setHasVideoInput(false);
+        }
+      }
+    };
+
+    refreshDevices();
+
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (mediaDevices?.addEventListener) {
+      const handler = () => refreshDevices();
+      mediaDevices.addEventListener('devicechange', handler);
+      return () => {
+        mounted = false;
+        mediaDevices.removeEventListener('devicechange', handler);
+      };
+    }
+
+    if (mediaDevices) {
+      const previousHandler = mediaDevices.ondevicechange;
+      const handler = () => refreshDevices();
+      mediaDevices.ondevicechange = handler;
+      return () => {
+        mounted = false;
+        if (mediaDevices.ondevicechange === handler) {
+          mediaDevices.ondevicechange = previousHandler ?? null;
+        } else {
+          mediaDevices.ondevicechange = previousHandler ?? null;
+        }
+      };
+    }
+
+    return () => {
+      mounted = false;
     };
   }, []);
   const [connectionDetails, setConnectionDetails] = React.useState<ConnectionDetails | undefined>(
@@ -63,6 +111,11 @@ export function PageClientImpl(props: {
   const [isCodeFieldVisible, setIsCodeFieldVisible] = React.useState<boolean>(initialCodePresent);
 
   const preJoinContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const [isDeviceNoticeDismissed, setIsDeviceNoticeDismissed] = React.useState(false);
+  const preJoinFormClassName =
+    hasVideoInput === false
+      ? `${roomStyles.preJoinForm} ${roomStyles.cameraDisabled}`
+      : roomStyles.preJoinForm;
 
   React.useEffect(() => {
     setRoomCodeInput(codeFromUrl);
@@ -87,6 +140,12 @@ export function PageClientImpl(props: {
   }, [displayedUsername]);
 
   React.useEffect(() => {
+    if (hasVideoInput === false) {
+      setIsDeviceNoticeDismissed(false);
+    }
+  }, [hasVideoInput]);
+
+  React.useEffect(() => {
     const input = preJoinContainerRef.current?.querySelector<HTMLInputElement>(
       'form.lk-username-container input#username',
     );
@@ -105,17 +164,24 @@ export function PageClientImpl(props: {
       setNameError('Введите имя, чтобы продолжить');
       return;
     }
-    values.username = normalizedUsername;
     const normalizedCode = roomCodeInput.trim();
     if (roomCodeRequired && normalizedCode.length === 0) {
       setCodeError('Введите код встречи');
       return;
     }
+    const normalizedChoices: LocalUserChoices = {
+      ...values,
+      username: normalizedUsername,
+      videoEnabled: hasVideoInput !== false && values.videoEnabled,
+    };
+    if (hasVideoInput === false) {
+      normalizedChoices.videoDeviceId = '';
+    }
     setNameError(undefined);
     setCodeError(undefined);
     const url = new URL(CONN_DETAILS_ENDPOINT, window.location.origin);
     url.searchParams.append('roomName', props.roomName);
-    url.searchParams.append('participantName', values.username);
+    url.searchParams.append('participantName', normalizedChoices.username);
     if (props.region) {
       url.searchParams.append('region', props.region);
     }
@@ -131,13 +197,14 @@ export function PageClientImpl(props: {
           const message = normalizedCode.length === 0 ? 'Для входа нужен код' : 'Неверный код';
           setCodeError(message);
           setRoomCodeRequired(true);
+          setIsCodeFieldVisible(true);
           return;
         }
         const errorText = await response.text();
         throw new Error(errorText || 'Failed to get connection details');
       }
       const connectionDetailsData = await response.json();
-      setPreJoinChoices(values);
+      setPreJoinChoices(normalizedChoices);
       setConnectionDetails(connectionDetailsData);
       setRoomCodeInput(normalizedCode);
       setRoomCodeRequired(normalizedCode.length > 0);
@@ -159,6 +226,7 @@ export function PageClientImpl(props: {
     roomCodeRequired,
     props.roomName,
     props.region,
+    hasVideoInput,
   ]);
   const handlePreJoinError = React.useCallback((e: any) => console.error(e), []);
 
@@ -213,6 +281,18 @@ export function PageClientImpl(props: {
                 У меня есть код
               </button>
             )}
+            {hasVideoInput === false && !isDeviceNoticeDismissed && (
+              <div className={roomStyles.deviceNotice}>
+                <span>Камеру не нашли — включение видео будет недоступно.</span>
+                <button
+                  type="button"
+                  onClick={() => setIsDeviceNoticeDismissed(true)}
+                  aria-label="Скрыть уведомление о камере"
+                >
+                  Скрыть
+                </button>
+              </div>
+            )}
             <button
               type="button"
               className={roomStyles.joinButton}
@@ -233,7 +313,7 @@ export function PageClientImpl(props: {
               Подключиться
             </button>
           </div>
-          <div className={roomStyles.preJoinForm} ref={preJoinContainerRef}>
+          <div className={preJoinFormClassName} ref={preJoinContainerRef}>
             <PreJoin
               defaults={preJoinDefaults}
               onSubmit={handlePreJoinSubmit}
@@ -249,6 +329,7 @@ export function PageClientImpl(props: {
           connectionDetails={connectionDetails}
           userChoices={preJoinChoices}
           options={{ codec: props.codec, hq: props.hq }}
+          cameraAvailable={hasVideoInput !== false}
         />
       )}
     </main>
@@ -262,13 +343,87 @@ function VideoConferenceComponent(props: {
     hq: boolean;
     codec: VideoCodec;
   };
+  cameraAvailable: boolean;
 }) {
+  const NO_CAMERA_MESSAGE = 'Камеру не нашли — включение видео отключено.';
   const router = useRouter();
+  const [hasCamera, setHasCamera] = React.useState<boolean>(props.cameraAvailable);
+  const [deviceMessage, setDeviceMessage] = React.useState<string | null>(
+    props.cameraAvailable ? null : NO_CAMERA_MESSAGE,
+  );
+  const [isDeviceBannerDismissed, setIsDeviceBannerDismissed] = React.useState(false);
+
+  const refreshCameraAvailability = React.useCallback(async () => {
+    try {
+      const devices = await Room.getLocalDevices('videoinput');
+      const available = devices.length > 0;
+      setHasCamera(available);
+      setDeviceMessage((prev) => {
+        if (available) {
+          return prev === NO_CAMERA_MESSAGE ? null : prev;
+        }
+        return NO_CAMERA_MESSAGE;
+      });
+    } catch (error) {
+      console.error('Failed to enumerate video devices', error);
+      setHasCamera(false);
+      setDeviceMessage(NO_CAMERA_MESSAGE);
+    }
+  }, [NO_CAMERA_MESSAGE]);
+
+  React.useEffect(() => {
+    if (props.cameraAvailable) {
+      setHasCamera(true);
+      setDeviceMessage(null);
+    } else {
+      setHasCamera(false);
+      setDeviceMessage(NO_CAMERA_MESSAGE);
+    }
+  }, [props.cameraAvailable, NO_CAMERA_MESSAGE]);
+
+  React.useEffect(() => {
+    if (deviceMessage) {
+      setIsDeviceBannerDismissed(false);
+    }
+  }, [deviceMessage]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    refreshCameraAvailability();
+
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!mediaDevices) {
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const handler = () => {
+      if (mounted) {
+        refreshCameraAvailability();
+      }
+    };
+
+    if (mediaDevices.addEventListener) {
+      mediaDevices.addEventListener('devicechange', handler);
+      return () => {
+        mounted = false;
+        mediaDevices.removeEventListener('devicechange', handler);
+      };
+    }
+
+    const previousHandler = mediaDevices.ondevicechange;
+    mediaDevices.ondevicechange = handler;
+    return () => {
+      mounted = false;
+      mediaDevices.ondevicechange = previousHandler ?? null;
+    };
+  }, [refreshCameraAvailability]);
 
   const roomOptions = React.useMemo((): RoomOptions => {
-    let videoCodec: VideoCodec | undefined = props.options.codec ? props.options.codec : 'vp9';
+    const videoCodec: VideoCodec | undefined = props.options.codec ? props.options.codec : 'vp9';
     const videoCaptureDefaults: VideoCaptureOptions = {
-      deviceId: props.userChoices.videoDeviceId ?? undefined,
+      deviceId: hasCamera ? props.userChoices.videoDeviceId ?? undefined : undefined,
       resolution: props.options.hq ? VideoPresets.h2160 : VideoPresets.h720,
     };
     const publishDefaults: TrackPublishDefaults = {
@@ -280,8 +435,8 @@ function VideoConferenceComponent(props: {
       videoCodec,
     };
     return {
-      videoCaptureDefaults: videoCaptureDefaults,
-      publishDefaults: publishDefaults,
+      videoCaptureDefaults,
+      publishDefaults,
       audioCaptureDefaults: {
         deviceId: props.userChoices.audioDeviceId ?? undefined,
       },
@@ -289,9 +444,14 @@ function VideoConferenceComponent(props: {
       dynacast: true,
       singlePeerConnection: isMeetStaging(),
     };
-  }, [props.userChoices, props.options.hq, props.options.codec]);
+  }, [
+    props.userChoices,
+    props.options.hq,
+    props.options.codec,
+    hasCamera,
+  ]);
 
-  const room = React.useMemo(() => new Room(roomOptions), [roomOptions]);
+  const room = React.useMemo(() => new Room(roomOptions), []);
 
   const connectOptions = React.useMemo((): RoomConnectOptions => {
     return {
@@ -302,12 +462,25 @@ function VideoConferenceComponent(props: {
   const handleOnLeave = React.useCallback(() => router.push('/'), [router]);
   const handleError = React.useCallback((error: Error) => {
     console.error(error);
-    alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
+    alert(`Произошла ошибка. Подробности смотрите в консоли: ${error.message}`);
   }, []);
+  const handleMediaDevicesError = React.useCallback(
+    (error: Error, kind?: MediaDeviceKind) => {
+      console.error(error);
+      if (kind === 'videoinput' || error.name === 'NotFoundError') {
+        setDeviceMessage(NO_CAMERA_MESSAGE);
+        setHasCamera(false);
+      } else {
+        setDeviceMessage(`Проблема с устройством: ${error.message}`);
+      }
+      refreshCameraAvailability();
+    },
+    [NO_CAMERA_MESSAGE, refreshCameraAvailability],
+  );
 
   React.useEffect(() => {
     room.on(RoomEvent.Disconnected, handleOnLeave);
-    room.on(RoomEvent.MediaDevicesError, handleError);
+    room.on(RoomEvent.MediaDevicesError, handleMediaDevicesError);
 
     room
       .connect(
@@ -318,19 +491,23 @@ function VideoConferenceComponent(props: {
       .catch((error) => {
         handleError(error);
       });
-    if (props.userChoices.videoEnabled) {
+
+    if (props.userChoices.videoEnabled && hasCamera) {
       room.localParticipant.setCameraEnabled(true).catch((error) => {
-        handleError(error);
+        handleMediaDevicesError(error, 'videoinput');
       });
+    } else {
+      room.localParticipant.setCameraEnabled(false).catch(() => undefined);
     }
     if (props.userChoices.audioEnabled) {
       room.localParticipant.setMicrophoneEnabled(true).catch((error) => {
         handleError(error);
       });
     }
+
     return () => {
       room.off(RoomEvent.Disconnected, handleOnLeave);
-      room.off(RoomEvent.MediaDevicesError, handleError);
+      room.off(RoomEvent.MediaDevicesError, handleMediaDevicesError);
     };
   }, [
     room,
@@ -338,7 +515,9 @@ function VideoConferenceComponent(props: {
     props.userChoices,
     connectOptions,
     handleOnLeave,
+    handleMediaDevicesError,
     handleError,
+    hasCamera,
   ]);
 
   const lowPowerMode = useLowCPUOptimizer(room);
@@ -349,8 +528,24 @@ function VideoConferenceComponent(props: {
     }
   }, [lowPowerMode]);
 
+  const roomShellClassName = `${roomStyles.roomShell} lk-room-container ${
+    hasCamera ? '' : roomStyles.cameraDisabled
+  }`;
+
   return (
-    <div className={`${roomStyles.roomShell} lk-room-container`}>
+    <div className={roomShellClassName}>
+      {deviceMessage && !isDeviceBannerDismissed && (
+        <div className={roomStyles.deviceBanner} role="status" aria-live="polite">
+          <span>{deviceMessage}</span>
+          <button
+            type="button"
+            onClick={() => setIsDeviceBannerDismissed(true)}
+            aria-label="Скрыть уведомление о камере"
+          >
+            Скрыть
+          </button>
+        </div>
+      )}
       <RoomContext.Provider value={room}>
         <KeyboardShortcuts />
         <VideoConference
